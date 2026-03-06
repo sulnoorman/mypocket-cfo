@@ -1,0 +1,4 @@
+const tsrStartManifest = () => ({ "routes": { "__root__": { "filePath": "/home/sulthan/Projects/mypocket-cfo/src/routes/__root.tsx", "children": ["/", "/pockets", "/settings"], "preloads": ["/assets/main-Crm8iZpQ.js"], "assets": [] }, "/": { "filePath": "/home/sulthan/Projects/mypocket-cfo/src/routes/index.tsx", "assets": [], "preloads": ["/assets/index-jhdfWbkA.js", "/assets/format-DvX4A24Q.js"] }, "/pockets": { "filePath": "/home/sulthan/Projects/mypocket-cfo/src/routes/pockets.tsx", "assets": [], "preloads": ["/assets/pockets-jsHbn5nw.js", "/assets/format-DvX4A24Q.js"] }, "/settings": { "filePath": "/home/sulthan/Projects/mypocket-cfo/src/routes/settings.tsx", "assets": [], "preloads": ["/assets/settings-Ct7nLWg2.js"] } }, "clientEntry": "/assets/main-Crm8iZpQ.js" });
+export {
+  tsrStartManifest
+};
