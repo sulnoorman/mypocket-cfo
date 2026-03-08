@@ -1,36 +1,38 @@
 import { createServerFn } from "@tanstack/react-start"
-import {
-  createPocketRecord,
-  createTransactionRecord,
-  deleteTransactionRecord,
-  listAllTransactions,
-  listPocketRecords,
-  listRecentTransactions,
-  totalAmountByType,
-  totalPocketSpending,
-  createPocketItemRecord,
-  togglePocketItemRecord,
-  deletePocketItemRecord,
-  listPocketItems,
-  archivePocketRecord,
-  type PocketItemRecord,
-  type PocketRecord
-} from "../db/client"
+import { db, schema } from "~/db/drizzle"
+import { and, desc, eq, isNull } from "drizzle-orm"
 import { parseSmartInput } from "../lib/smartParser"
 
-export type Pocket = PocketRecord & {
-  items: PocketItemRecord[]
+export type Pocket = {
+  id: number
+  userId: string
+  name: string
+  budgetLimit: number | null
+  type: "recurring" | "project"
+  status: "active" | "archived"
+  resetDay: number | null
+  lastResetAt: string | null
+  createdAt: string
+  items: {
+    id: number
+    pocketId: number
+    userId: string
+    name: string
+    isChecked: boolean
+    createdAt: string
+  }[]
   spent: number
 }
 
 export type Transaction = {
   id: number
+  userId: string
   description: string
   amount: number
   type: "income" | "expense"
   category: string | null
   pocketId: number | null
-  date: number
+  date: string
 }
 
 export type DashboardData = {
@@ -73,29 +75,126 @@ function buildExpenseTrend(params: {
   return monthKeys.map((mk) => ({ month: mk.label, total: totals.get(mk.key) ?? 0 }))
 }
 
+async function ensureMonthlyResets(userId: string) {
+  const now = new Date()
+  const dayOfMonth = now.getDate()
+  const rows = await db.select().from(schema.pockets).where(and(eq(schema.pockets.userId, userId), eq(schema.pockets.type, "recurring"), eq(schema.pockets.status, "active")))
+  for (const p of rows) {
+    if (p.resetDay && (!p.lastResetAt || new Date(p.lastResetAt).getMonth() !== now.getMonth() || new Date(p.lastResetAt).getFullYear() !== now.getFullYear())) {
+      if (dayOfMonth >= p.resetDay) {
+        await db.update(schema.pocketItems).set({ isChecked: false }).where(and(eq(schema.pocketItems.userId, userId), eq(schema.pocketItems.pocketId, p.id)))
+        await db.update(schema.pockets).set({ lastResetAt: new Date() }).where(and(eq(schema.pockets.userId, userId), eq(schema.pockets.id, p.id)))
+      }
+    }
+  }
+}
+
+async function getTotals(userId: string) {
+  const txs = await db.select().from(schema.transactions).where(eq(schema.transactions.userId, userId))
+  let totalIncome = 0
+  let totalSpending = 0
+  for (const tx of txs) {
+    const amt = Number(tx.amount)
+    if (tx.type === "income") totalIncome += amt
+    else totalSpending += amt
+  }
+  return {
+    totalIncome,
+    totalSpending,
+    remaining: totalIncome - totalSpending,
+    transactions: txs.map(t => ({
+      id: t.id,
+      userId: t.userId,
+      description: t.description,
+      amount: Number(t.amount),
+      type: t.type,
+      category: t.category,
+      pocketId: t.pocketId,
+      date: t.occurredAt.toISOString()
+    }))
+  }
+}
+
+export const getAllTransactions = createServerFn({
+  method: "GET"
+})
+  .inputValidator((data: { userId: string }) => data)
+  .handler(async ({ data }) => {
+    const txs = await db.select()
+      .from(schema.transactions)
+      .where(eq(schema.transactions.userId, data.userId))
+      .orderBy(desc(schema.transactions.occurredAt))
+    
+    return txs.map(t => ({
+      id: t.id,
+      userId: t.userId,
+      description: t.description,
+      amount: Number(t.amount),
+      type: t.type,
+      category: t.category,
+      pocketId: t.pocketId,
+      date: t.occurredAt.toISOString()
+    })) satisfies Transaction[]
+  })
+
 export const getDashboardData = createServerFn({
   method: "GET"
 })
-  .handler(async () => {
-    const totalIncome = totalAmountByType("income")
-    const totalSpending = totalAmountByType("expense")
+  .inputValidator((data: { userId: string }) => data)
+  .handler(async ({ data }) => {
+    const userId = data.userId
+    await ensureMonthlyResets(userId)
+    const { totalIncome, totalSpending, transactions: txs } = await getTotals(userId)
     const remaining = totalIncome - totalSpending
 
-    const allTransactions = listAllTransactions()
+    const allTransactions = txs.map(t => ({ type: t.type, amount: Number(t.amount), date: Math.floor(new Date(t.date).getTime() / 1000) }))
     const expenseTrend = buildExpenseTrend({
       months: 6,
       now: new Date(),
       transactions: allTransactions
     })
 
-    const allPockets = listPocketRecords()
-    const enrichedPockets: Pocket[] = allPockets.map((p) => ({
-      ...p,
-      items: listPocketItems(p.id),
-      spent: totalPocketSpending(p.id)
+    const allPocketsRaw = await db.select().from(schema.pockets).where(and(eq(schema.pockets.userId, userId), eq(schema.pockets.status, "active")))
+    const pocketIds = allPocketsRaw.map(p => p.id)
+    const items = pocketIds.length ? await db.select().from(schema.pocketItems).where(and(eq(schema.pocketItems.userId, userId))) : []
+    const spentByPocket = new Map<number, number>()
+    for (const tx of txs) {
+      if (tx.type === "expense" && tx.pocketId) {
+        spentByPocket.set(tx.pocketId, (spentByPocket.get(tx.pocketId) || 0) + Number(tx.amount))
+      }
+    }
+    const enrichedPockets: Pocket[] = allPocketsRaw.map(p => ({
+      id: p.id,
+      userId: p.userId,
+      name: p.name,
+      budgetLimit: p.budgetLimit != null ? Number(p.budgetLimit) : null,
+      type: p.type,
+      status: p.status,
+      resetDay: p.resetDay ?? null,
+      lastResetAt: p.lastResetAt ? p.lastResetAt.toISOString() : null,
+      createdAt: p.createdAt.toISOString(),
+      items: items.filter(i => i.pocketId === p.id).map(i => ({
+        id: i.id,
+        pocketId: i.pocketId,
+        userId: i.userId,
+        name: i.name,
+        isChecked: i.isChecked,
+        createdAt: i.createdAt.toISOString()
+      })),
+      spent: spentByPocket.get(p.id) || 0
     }))
 
-    const recent = listRecentTransactions(10)
+    const recentRows = await db.select().from(schema.transactions).where(eq(schema.transactions.userId, userId)).orderBy(desc(schema.transactions.occurredAt)).limit(10)
+    const recent = recentRows.map(t => ({
+      id: t.id,
+      userId: t.userId,
+      description: t.description,
+      amount: Number(t.amount),
+      type: t.type,
+      category: t.category,
+      pocketId: t.pocketId,
+      date: t.occurredAt.toISOString()
+    }))
 
     return {
       totalIncome,
@@ -112,6 +211,7 @@ export const createPocket = createServerFn({
 })
   .inputValidator(
     (data: {
+      userId: string
       name: string
       budgetLimit?: number | null
       type: "recurring" | "project"
@@ -124,66 +224,88 @@ export const createPocket = createServerFn({
     if (!name) {
       throw new Error("Pocket name is required")
     }
-    const pocket = createPocketRecord({
+    const rows = await db.insert(schema.pockets).values({
+      userId: data.userId,
       name,
-      budgetLimit: limitValue,
+      budgetLimit: limitValue != null ? String(limitValue.toFixed ? limitValue.toFixed(2) : limitValue) : null,
       type: data.type,
       resetDay: data.resetDay
-    })
-    return pocket
+    }).returning()
+    return rows[0]
   })
 
 export const listPockets = createServerFn({
   method: "GET"
-}).handler(async () => {
-  const all = listPocketRecords()
+}).inputValidator((data: { userId: string }) => data).handler(async ({ data }) => {
+  await ensureMonthlyResets(data.userId)
+  const txs = await db.select().from(schema.transactions).where(eq(schema.transactions.userId, data.userId))
+  const all = await db.select().from(schema.pockets).where(and(eq(schema.pockets.userId, data.userId), eq(schema.pockets.status, "active")))
+  const items = await db.select().from(schema.pocketItems).where(eq(schema.pocketItems.userId, data.userId))
+  const spentByPocket = new Map<number, number>()
+  for (const tx of txs) {
+    if (tx.type === "expense" && tx.pocketId) {
+      spentByPocket.set(tx.pocketId, (spentByPocket.get(tx.pocketId) || 0) + Number(tx.amount))
+    }
+  }
   return all.map((p) => ({
-    ...p,
-    items: listPocketItems(p.id),
-    spent: totalPocketSpending(p.id)
+    id: p.id,
+    userId: p.userId,
+    name: p.name,
+    budgetLimit: p.budgetLimit,
+    type: p.type,
+    status: p.status,
+    resetDay: p.resetDay ?? null,
+    lastResetAt: p.lastResetAt ? p.lastResetAt.toISOString() : null,
+    createdAt: p.createdAt.toISOString(),
+    items: items.filter(i => i.pocketId === p.id),
+    spent: spentByPocket.get(p.id) || 0
   }))
 })
 
 export const archivePocket = createServerFn({
   method: "POST"
 })
-  .inputValidator((data: { id: number }) => data)
+  .inputValidator((data: { userId: string; id: number }) => data)
   .handler(async ({ data }) => {
-    const archived = archivePocketRecord(data.id)
-    if (!archived) {
+    const res = await db.update(schema.pockets).set({ status: "archived" }).where(and(eq(schema.pockets.userId, data.userId), eq(schema.pockets.id, data.id))).returning()
+    if (!res[0]) {
       throw new Error("Pocket not found")
     }
-    return archived
+    return res[0]
   })
 
 export const createPocketItem = createServerFn({
   method: "POST"
 })
-  .inputValidator((data: { pocketId: number; name: string }) => data)
+  .inputValidator((data: { userId: string; pocketId: number; name: string }) => data)
   .handler(async ({ data }) => {
     if (!data.name.trim()) throw new Error("Item name required")
-    return createPocketItemRecord({
+    const rows = await db.insert(schema.pocketItems).values({
+      userId: data.userId,
       pocketId: data.pocketId,
       name: data.name
-    })
+    }).returning()
+    return rows[0]
   })
 
 export const togglePocketItem = createServerFn({
   method: "POST"
 })
-  .inputValidator((data: { id: number }) => data)
+  .inputValidator((data: { userId: string; id: number }) => data)
   .handler(async ({ data }) => {
-    const updated = togglePocketItemRecord(data.id)
-    if (!updated) throw new Error("Item not found")
-    return updated
+    const rows = await db.select().from(schema.pocketItems).where(and(eq(schema.pocketItems.userId, data.userId), eq(schema.pocketItems.id, data.id)))
+    const item = rows[0]
+    if (!item) throw new Error("Item not found")
+    const updated = await db.update(schema.pocketItems).set({ isChecked: !item.isChecked }).where(and(eq(schema.pocketItems.userId, data.userId), eq(schema.pocketItems.id, data.id))).returning()
+    return updated[0]
   })
 
 export const deletePocketItem = createServerFn({
   method: "POST"
 })
-  .inputValidator((data: { id: number }) => data)
+  .inputValidator((data: { userId: string; id: number }) => data)
   .handler(async ({ data }) => {
-    deletePocketItemRecord(data.id)
+    await db.delete(schema.pocketItems).where(and(eq(schema.pocketItems.userId, data.userId), eq(schema.pocketItems.id, data.id)))
     return { ok: true }
   })
 
@@ -192,6 +314,7 @@ export const createTransactionFromSmartInput = createServerFn({
 })
   .inputValidator(
     (data: {
+      userId: string
       text: string
       pocketId?: number | null
       date?: string | null
@@ -212,23 +335,24 @@ export const createTransactionFromSmartInput = createServerFn({
       typeof data.pocketId === "number" && Number.isFinite(data.pocketId)
         ? data.pocketId
         : null
-    const created = createTransactionRecord({
+    const rows = await db.insert(schema.transactions).values({
+      userId: data.userId,
       description: parsed.description,
-      amount: parsed.amount,
+      amount: String(parsed.amount.toFixed ? parsed.amount.toFixed(2) : parsed.amount),
       type: parsed.type,
       category: categorizationEnabled ? parsed.category : null,
       pocketId,
-      date: Math.floor(timestamp / 1000)
-    })
-    return created
+      occurredAt: new Date(timestamp)
+    }).returning()
+    return rows[0]
   })
 
 export const deleteTransaction = createServerFn({
   method: "POST"
 })
-  .inputValidator((data: { id: number }) => data)
+  .inputValidator((data: { userId: string; id: number }) => data)
   .handler(async ({ data }) => {
-    deleteTransactionRecord(data.id)
+    await db.delete(schema.transactions).where(and(eq(schema.transactions.userId, data.userId), eq(schema.transactions.id, data.id)))
     return {
       ok: true
     }
@@ -237,22 +361,22 @@ export const deleteTransaction = createServerFn({
 export const updatePocketBudget = createServerFn({
   method: "POST"
 })
-  .inputValidator((data: { id: number; budgetLimit: number | null }) => data)
+  .inputValidator((data: { userId: string; id: number; budgetLimit: number | null }) => data)
   .handler(async ({ data }) => {
-    const pockets = listPocketRecords()
-    const pocket = pockets.find((p) => p.id === data.id)
+    const rows = await db.update(schema.pockets).set({ budgetLimit: data.budgetLimit != null ? String(data.budgetLimit.toFixed ? data.budgetLimit.toFixed(2) : data.budgetLimit) : null }).where(and(eq(schema.pockets.userId, data.userId), eq(schema.pockets.id, data.id))).returning()
+    const pocket = rows[0]
     if (!pocket) {
       throw new Error("Pocket not found")
     }
-    pocket.budgetLimit = data.budgetLimit
     return pocket
   })
 
 export const getPocketSpending = createServerFn({
   method: "GET"
 })
-  .inputValidator((data: { pocketId: number }) => data)
+  .inputValidator((data: { userId: string; pocketId: number }) => data)
   .handler(async ({ data }) => {
-    const total = totalPocketSpending(data.pocketId)
+    const txs = await db.select().from(schema.transactions).where(and(eq(schema.transactions.userId, data.userId), eq(schema.transactions.pocketId, data.pocketId), eq(schema.transactions.type, "expense")))
+    const total = txs.reduce((sum, t) => sum + Number(t.amount), 0)
     return total
   })

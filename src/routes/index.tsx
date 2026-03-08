@@ -17,14 +17,30 @@ import {
   XAxis,
   YAxis
 } from "recharts"
-import { useMemo, useState } from "react"
+import { useMemo, useState, useEffect } from "react"
 import { getDashboardData, createTransactionFromSmartInput } from "~/server/finance"
 import { useAppPreferences } from "~/lib/preferences"
 import { formatDateFromUnix, formatMoney } from "~/lib/format"
 import { askFinanceQuestion } from "~/server/ai"
+import { supabase } from "~/lib/supabase"
+import MetricCard from "~/components/MetricCard"
 
 export const Route = createFileRoute("/")({
-  loader: () => getDashboardData(),
+  loader: async () => {
+    const { data } = await supabase.auth.getSession()
+    const userId = data.session?.user.id
+    if (!userId) {
+      return {
+        totalIncome: 0,
+        totalSpending: 0,
+        remaining: 0,
+        expenseTrend: [],
+        pockets: [],
+        recentTransactions: []
+      }
+    }
+    return getDashboardData({ data: { userId } })
+  },
   component: DashboardPage
 })
 
@@ -32,6 +48,24 @@ function DashboardPage() {
   const router = useRouter()
   const data = Route.useLoaderData()
   const { preferences } = useAppPreferences()
+  const [user, setUser] = useState<any>(null)
+  const [currentDate, setCurrentDate] = useState("")
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      setUser(data.user)
+    })
+
+    const now = new Date()
+    setCurrentDate(now.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    }))
+  }, [])
+
+  const username = user?.user_metadata?.username || user?.email || "Guest"
 
   const [smartText, setSmartText] = useState("")
   const [smartDate, setSmartDate] = useState("")
@@ -71,6 +105,7 @@ function DashboardPage() {
     try {
       await createTransactionFromSmartInput({
         data: {
+          userId: (await supabase.auth.getSession()).data.session!.user.id,
           text: smartText,
           pocketId:
             selectedPocketId === "" ? null : Number.parseInt(selectedPocketId, 10),
@@ -102,7 +137,7 @@ function DashboardPage() {
           question,
           endpoint:
             preferences.showAdvancedAiSettings &&
-            preferences.aiEndpointUrl.trim().length > 0
+              preferences.aiEndpointUrl.trim().length > 0
               ? preferences.aiEndpointUrl
               : null,
           systemPrompt: preferences.aiSystemPrompt || null
@@ -118,16 +153,17 @@ function DashboardPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
+      {/* Greating Label */}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="text-lg font-semibold tracking-tight">Dashboard</div>
+          <div className="text-lg font-semibold tracking-tight">Welcome back, {username}!</div>
           <div className="text-sm text-mutedForeground">
-            Snapshot finansial kamu — cepat, rapi, dan aman.
+            {currentDate}
           </div>
         </div>
-        <div className="text-xs text-mutedForeground">
-          {preferences.privacyMode ? "Privacy mode: on" : "Privacy mode: off"}
-        </div>
+      </div>
+      <div className="text-xs text-mutedForeground">
+        {preferences.privacyMode ? "Privacy mode: on" : "Privacy mode: off"}
       </div>
 
       {error && (
@@ -160,7 +196,58 @@ function DashboardPage() {
         />
       </section>
 
-      <section className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)]">
+      <section className="flex flex-col gap-6">
+        <Card>
+          <CardHeader
+            title="Smart Input"
+            description={
+              preferences.smartCategorizationEnabled
+                ? "Auto-tagging aktif · kategori otomatis"
+                : "Auto-tagging nonaktif · kategori manual"
+            }
+            icon={Sparkles}
+          />
+          <div className="mt-4 flex flex-col gap-3">
+            <textarea
+              value={smartText}
+              onChange={(e) => setSmartText(e.target.value)}
+              rows={3}
+              className="w-full resize-none rounded-lg border border-border/60 bg-input px-3 py-2 text-sm outline-none ring-0 focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+              placeholder="Contoh: nambah jajan kopi 25rb, gaji masuk 5jt"
+            />
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex flex-wrap items-center gap-3">
+                <select
+                  value={selectedPocketId}
+                  onChange={(e) => setSelectedPocketId(e.target.value)}
+                  className="h-9 rounded-md border border-border/60 bg-input px-2 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                >
+                  <option value="">Tanpa pocket</option>
+                  {data.pockets.map((pocket) => (
+                    <option key={pocket.id} value={pocket.id}>
+                      {pocket.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="date"
+                  value={smartDate}
+                  onChange={(e) => setSmartDate(e.target.value)}
+                  className="h-9 rounded-md border border-border/60 bg-input px-2 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleSmartSubmit}
+                disabled={isSavingSmart}
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-sky-500 px-3 text-xs font-medium text-background transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isSavingSmart ? "Menyimpan..." : "Simpan transaksi"}
+              </button>
+            </div>
+          </div>
+        </Card>
+
         <Card>
           <CardHeader
             title="Monthly Expense Trend"
@@ -212,7 +299,7 @@ function DashboardPage() {
           </div>
         </Card>
 
-        <div className="flex flex-col gap-6">
+        <section className="grid gap-6 md:grid-cols-3">
           <Card>
             <CardHeader
               title="Recent Transactions"
@@ -234,7 +321,7 @@ function DashboardPage() {
                           {tx.description}
                         </div>
                         <div className="mt-0.5 text-xs text-mutedForeground">
-                          {formatDateFromUnix(tx.date)}
+                          {formatDateFromUnix(Math.floor(new Date(tx.date as any).getTime() / 1000))}
                           {tx.category ? ` · ${tx.category}` : ""}
                         </div>
                       </div>
@@ -313,95 +400,42 @@ function DashboardPage() {
               </Link>
             </div>
           </Card>
-        </div>
-      </section>
 
-      <section className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1.2fr)]">
-        <Card>
-          <CardHeader
-            title="Smart Input"
-            description={
-              preferences.smartCategorizationEnabled
-                ? "Auto-tagging aktif · kategori otomatis"
-                : "Auto-tagging nonaktif · kategori manual"
-            }
-            icon={Sparkles}
-          />
-          <div className="mt-4 flex flex-col gap-3">
-            <textarea
-              value={smartText}
-              onChange={(e) => setSmartText(e.target.value)}
-              rows={3}
-              className="w-full resize-none rounded-lg border border-border/60 bg-input px-3 py-2 text-sm outline-none ring-0 focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-              placeholder="Contoh: nambah jajan kopi 25rb, gaji masuk 5jt"
-            />
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div className="flex flex-wrap items-center gap-3">
-                <select
-                  value={selectedPocketId}
-                  onChange={(e) => setSelectedPocketId(e.target.value)}
-                  className="h-9 rounded-md border border-border/60 bg-input px-2 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-                >
-                  <option value="">Tanpa pocket</option>
-                  {data.pockets.map((pocket) => (
-                    <option key={pocket.id} value={pocket.id}>
-                      {pocket.name}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  type="date"
-                  value={smartDate}
-                  onChange={(e) => setSmartDate(e.target.value)}
-                  className="h-9 rounded-md border border-border/60 bg-input px-2 text-xs outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={handleSmartSubmit}
-                disabled={isSavingSmart}
-                className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-sky-500 px-3 text-xs font-medium text-background transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isSavingSmart ? "Menyimpan..." : "Simpan transaksi"}
-              </button>
-            </div>
-          </div>
-        </Card>
-
-        {preferences.ragAiAnalysisEnabled && (
-          <Card>
-            <CardHeader
-              title="Ask Your CFO"
-              description="Rule-based sekarang, siap diupgrade ke Transformers.js."
-              icon={Sparkles}
-            />
-            <div className="mt-4 flex flex-col gap-3">
-              <textarea
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                rows={2}
-                className="w-full resize-none rounded-lg border border-border/60 bg-input px-3 py-2 text-sm outline-none ring-0 focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-                placeholder="Contoh: Berapa total jajan bulan lalu?"
+          {preferences.ragAiAnalysisEnabled && (
+            <Card>
+              <CardHeader
+                title="Ask Your CFO"
+                description="Rule-based sekarang, siap diupgrade ke Transformers.js."
+                icon={Sparkles}
               />
-              <div className="flex items-center justify-between gap-2">
-                <button
-                  type="button"
-                  onClick={handleAsk}
-                  disabled={isAsking}
-                  className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-slate-800 px-3 text-sm font-medium text-foreground ring-1 ring-slate-600 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isAsking ? "Memikirkan..." : "Tanya CFO"}
-                </button>
-                <span className="text-xs text-mutedForeground">AI analysis: on</span>
-              </div>
-              {answer && (
-                <div className="rounded-md border border-border/60 bg-background/50 px-3 py-2 text-sm text-foreground">
-                  {answer}
+              <div className="mt-4 flex flex-col gap-3">
+                <textarea
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  rows={2}
+                  className="w-full resize-none rounded-lg border border-border/60 bg-input px-3 py-2 text-sm outline-none ring-0 focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
+                  placeholder="Contoh: Berapa total jajan bulan lalu?"
+                />
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={handleAsk}
+                    disabled={isAsking}
+                    className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-slate-800 px-3 text-sm font-medium text-foreground ring-1 ring-slate-600 transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {isAsking ? "Memikirkan..." : "Tanya CFO"}
+                  </button>
+                  <span className="text-xs text-mutedForeground">AI analysis: on</span>
                 </div>
-              )}
-            </div>
-          </Card>
-        )}
+                {answer && (
+                  <div className="mt-2 rounded-md border border-border/60 bg-background/50 px-3 py-2 text-sm text-foreground max-h-32 overflow-auto">
+                    {answer}
+                  </div>
+                )}
+              </div>
+            </Card>
+          )}
+        </section>
       </section>
     </div>
   )
@@ -441,42 +475,6 @@ function EmptyState({ text }: { text: string }) {
   return (
     <div className="rounded-md border border-dashed border-border/60 px-3 py-6 text-center text-sm text-mutedForeground">
       {text}
-    </div>
-  )
-}
-
-function MetricCard({
-  title,
-  value,
-  valueClassName,
-  tone,
-  icon: Icon
-}: {
-  title: string
-  value: string
-  valueClassName?: string
-  tone: "positive" | "negative" | "neutral"
-  icon: ComponentType<{ className?: string }>
-}) {
-  const colorClass =
-    tone === "positive"
-      ? "text-emerald-400"
-      : tone === "negative"
-        ? "text-rose-400"
-        : "text-sky-400"
-  return (
-    <div className="rounded-xl border border-border/60 bg-card/40 p-4 shadow-sm shadow-sky-500/5">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex flex-col gap-1 min-w-0">
-          <span className="text-xs text-mutedForeground">{title}</span>
-          <span className={["text-lg font-semibold truncate", valueClassName ?? ""].join(" ")}>
-            {value}
-          </span>
-        </div>
-        <div className="rounded-md bg-background/60 p-2">
-          <Icon className={`h-5 w-5 ${colorClass}`} />
-        </div>
-      </div>
     </div>
   )
 }

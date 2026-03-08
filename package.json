@@ -8,17 +8,23 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "db:push": "bunx drizzle-kit push"
   },
   "dependencies": {
     "@tanstack/react-router": "^1.77.6",
     "@tanstack/react-start": "^1.77.6",
+    "@supabase/supabase-js": "^2.45.1",
+    "drizzle-orm": "^0.44.2",
     "lucide-react": "^0.453.0",
+    "postgres": "^3.4.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "recharts": "^3.7.0"
   },
   "devDependencies": {
+    "drizzle-kit": "^0.31.4",
+    "dotenv": "^16.4.5",
     "bun-types": "^1.1.0",
     "@types/node": "^22.7.4",
     "@types/react": "^18.3.5",

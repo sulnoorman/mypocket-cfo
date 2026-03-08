@@ -1,6 +1,7 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router"
 import type { ComponentType, ReactNode } from "react"
 import { useState } from "react"
+import { useEffect } from "react"
 import {
   Archive,
   CheckCircle2,
@@ -22,9 +23,24 @@ import {
 import type { Pocket } from "~/server/finance"
 import { formatMoney } from "~/lib/format"
 import { useAppPreferences } from "~/lib/preferences"
+import { supabase } from "~/lib/supabase"
 
 export const Route = createFileRoute("/pockets")({
-  loader: () => getDashboardData(),
+  loader: async () => {
+    const { data } = await supabase.auth.getSession()
+    const userId = data.session?.user.id
+    if (!userId) {
+      return {
+        totalIncome: 0,
+        totalSpending: 0,
+        remaining: 0,
+        expenseTrend: [],
+        pockets: [],
+        recentTransactions: []
+      }
+    }
+    return getDashboardData({ data: { userId } })
+  },
   component: PocketsPage
 })
 
@@ -32,6 +48,17 @@ function PocketsPage() {
   const router = useRouter()
   const { preferences } = useAppPreferences()
   const data = Route.useLoaderData()
+  const [currentDate, setCurrentDate] = useState("")
+
+  useEffect(() => {
+    const now = new Date()
+    setCurrentDate(now.toLocaleDateString('en-US', { 
+      weekday: 'long', 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric' 
+    }))
+  }, [])
 
   const [pocketName, setPocketName] = useState("")
   const [pocketBudget, setPocketBudget] = useState("")
@@ -65,6 +92,7 @@ function PocketsPage() {
 
       await createPocket({
         data: {
+          userId: (await supabase.auth.getSession()).data.session!.user.id,
           name: pocketName,
           budgetLimit: Number.isNaN(budget) ? null : budget,
           type: pocketType,
@@ -83,10 +111,12 @@ function PocketsPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-      <div>
-        <div className="text-lg font-semibold tracking-tight">Pockets</div>
-        <div className="text-sm text-mutedForeground">
-          Organize budgets and recurring checklists.
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-lg font-semibold tracking-tight">Pockets</div>
+          <div className="text-sm text-mutedForeground">
+            Manage your budgets and goals — {currentDate}
+          </div>
         </div>
       </div>
 
@@ -242,7 +272,7 @@ function PocketCard({
     if (!itemName.trim()) return
     setIsAddingItem(true)
     try {
-      await createPocketItem({ data: { pocketId: pocket.id, name: itemName } })
+      await createPocketItem({ data: { userId: (await supabase.auth.getSession()).data.session!.user.id, pocketId: pocket.id, name: itemName } })
       setItemName("")
       onRefresh()
     } finally {
@@ -251,18 +281,18 @@ function PocketCard({
   }
 
   async function handleToggleItem(id: number) {
-    await togglePocketItem({ data: { id } })
+    await togglePocketItem({ data: { userId: (await supabase.auth.getSession()).data.session!.user.id, id } })
     onRefresh()
   }
 
   async function handleDeleteItem(id: number) {
-    await deletePocketItem({ data: { id } })
+    await deletePocketItem({ data: { userId: (await supabase.auth.getSession()).data.session!.user.id, id } })
     onRefresh()
   }
 
   async function handleArchive() {
     if (confirm("Archive this pocket?")) {
-      await archivePocket({ data: { id: pocket.id } })
+      await archivePocket({ data: { userId: (await supabase.auth.getSession()).data.session!.user.id, id: pocket.id } })
       onRefresh()
     }
   }
@@ -381,4 +411,3 @@ function PocketCard({
     </div>
   )
 }
-

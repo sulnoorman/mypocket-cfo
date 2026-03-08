@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router"
 import type { ComponentType, ReactNode } from "react"
+import { useEffect, useState } from "react"
 import {
   Bot,
   CircleUser,
@@ -7,9 +8,13 @@ import {
   PanelLeftClose,
   Tags,
   WalletMinimal,
-  DollarSign
+  DollarSign,
+  User,
+  Mail,
+  Calendar
 } from "lucide-react"
 import { useAppPreferences } from "~/lib/preferences"
+import { supabase } from "~/lib/supabase"
 
 export const Route = createFileRoute("/settings")({
   component: SettingsPage
@@ -17,6 +22,25 @@ export const Route = createFileRoute("/settings")({
 
 function SettingsPage() {
   const { preferences, updatePreferences } = useAppPreferences()
+  const [user, setUser] = useState<any>(null)
+  const [currentDate, setCurrentDate] = useState("")
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => {
+      setUser(data.user)
+    })
+
+    const now = new Date()
+    setCurrentDate(now.toLocaleDateString('en-US', { 
+      weekday: 'long', 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric' 
+    }))
+  }, [])
+
+  const username = user?.user_metadata?.username || "Not set"
+  const email = user?.email || "Not set"
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
@@ -32,26 +56,56 @@ function SettingsPage() {
       <section className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader
-            title="General"
-            description="Profile & display preferences."
+            title="Profile & Identity"
+            description="Your account information from Supabase."
             icon={CircleUser}
           />
           <div className="mt-4 grid gap-4">
-            <Field label="Profile name">
+            <div className="flex items-center gap-3 rounded-md border border-border/40 bg-background/40 p-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-500/10 text-sky-400">
+                <User className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] uppercase tracking-wider text-mutedForeground">Username</div>
+                <div className="text-sm font-medium truncate text-foreground">{username}</div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 rounded-md border border-border/40 bg-background/40 p-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-400">
+                <Mail className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] uppercase tracking-wider text-mutedForeground">Email Address</div>
+                <div className="text-sm font-medium truncate text-foreground">{email}</div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 rounded-md border border-border/40 bg-background/40 p-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-amber-500/10 text-amber-400">
+                <Calendar className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-[10px] uppercase tracking-wider text-mutedForeground">Today's Date</div>
+                <div className="text-sm font-medium truncate text-foreground">{currentDate}</div>
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader
+            title="General Display"
+            description="Personalize your dashboard experience."
+            icon={Tags}
+          />
+          <div className="mt-4 grid gap-4">
+            <Field label="Local Profile Alias (Optional)">
               <input
                 value={preferences.profileName}
                 onChange={(e) => updatePreferences({ profileName: e.target.value })}
                 className="h-9 w-full rounded-md border border-border/60 bg-input px-3 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-                placeholder="e.g. Sulthan"
-              />
-            </Field>
-            <Field label="Email (optional)">
-              <input
-                type="email"
-                value={preferences.profileEmail}
-                onChange={(e) => updatePreferences({ profileEmail: e.target.value })}
-                className="h-9 w-full rounded-md border border-border/60 bg-input px-3 text-sm outline-none focus:border-sky-500 focus:ring-1 focus:ring-sky-500"
-                placeholder="you@example.com"
+                placeholder="e.g. My Pocket Name"
               />
             </Field>
             <div className="grid gap-2">

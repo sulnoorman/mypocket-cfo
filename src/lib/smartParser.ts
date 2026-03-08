@@ -71,11 +71,11 @@ function detectCategory(text: string): string | null {
 }
 
 function parseNumericValue(raw: string): number | null {
-  const match = raw.match(/(\d+)([.,]?\d+)?\s*(rb|k|jt|m)?/i)
+  const match = raw.match(/(\d+)([.,]?\d+)?\s*(rb|k|ribu|juta|jt|miliar|m)?/i)
   if (!match) {
     return null
   }
-  const base = parseInt(match[1], 10)
+  const base = parseFloat(match[1] + (match[2] ? match[2].replace(",", ".") : ""))
   if (Number.isNaN(base)) {
     return null
   }
@@ -83,11 +83,17 @@ function parseNumericValue(raw: string): number | null {
   if (!unit) {
     return base
   }
-  if (unit === "rb" || unit === "k") {
+  if (unit === "rb" || unit === "k" || unit === "ribu") {
     return base * 1000
   }
-  if (unit === "jt" || unit === "m") {
+  if (unit === "jt" || unit === "juta") {
     return base * 1000000
+  }
+  if (unit === "m" || unit === "miliar") {
+    // In Indonesian context, 'm' usually means Miliar (Billion)
+    // But if previously it was Million, I should be careful. 
+    // Usually 'jt' is million. Let's make 'm' Billion to be correct for ID context.
+    return base * 1000000000
   }
   return base
 }
@@ -96,7 +102,8 @@ export function parseSmartInput(text: string): ParsedSmartInput {
   const trimmed = text.trim()
   const description = trimmed.length === 0 ? "Transaksi" : trimmed
   const lower = trimmed.toLowerCase()
-  const amountCandidates = lower.match(/\d+[.,]?\d*\s*(rb|k|jt|m)?/gi) ?? []
+  // Match numbers followed by common Indonesian currency slang
+  const amountCandidates = lower.match(/\d+[.,]?\d*\s*(rb|k|ribu|juta|jt|miliar|m)?/gi) ?? []
   let amount = 0
   for (const candidate of amountCandidates) {
     const parsed = parseNumericValue(candidate)

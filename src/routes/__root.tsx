@@ -6,7 +6,8 @@ import {
   HeadContent,
   Scripts,
   createRootRoute,
-  Link
+  Link,
+  useRouter
 } from "@tanstack/react-router"
 import appCss from "~/styles/tailwind.css?url"
 import {
@@ -19,8 +20,12 @@ import {
   Menu,
   Info,
   WalletCards,
+  LogOut,
+  ArrowRightLeft,
 } from "lucide-react"
 import { AppPreferencesProvider, useAppPreferences } from "~/lib/preferences"
+import { supabase } from "~/lib/supabase"
+import { useEffect } from "react"
 
 export const Route = createRootRoute({
   head: () => ({
@@ -74,8 +79,76 @@ function RootDocument({ children }: Readonly<{ children: ReactNode }>) {
 
 function AppShell({ children }: Readonly<{ children: ReactNode }>) {
   const { preferences, updatePreferences, mobileSidebarOpen, setMobileSidebarOpen } = useAppPreferences()
+  const router = useRouter()
+  const [session, setSession] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const publicPaths = ["/login", "/register", "/guide"]
+    
+    const checkAuth = async (currentSession: any) => {
+      setSession(currentSession)
+      setLoading(false)
+      const pathname = router.state.location.pathname
+      
+      if (!currentSession) {
+        if (!publicPaths.includes(pathname)) {
+          // If unauthenticated and on a protected route, redirect to register first (as per user's wish)
+          router.navigate({ to: "/register" })
+        }
+      } else {
+        if (pathname === "/login" || pathname === "/register") {
+          // If already logged in, redirect to dashboard
+          router.navigate({ to: "/" })
+        }
+      }
+    }
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
+      checkAuth(session)
+    })
+
+    supabase.auth.getSession().then(({ data }) => {
+      checkAuth(data.session)
+    })
+
+    return () => {
+      sub.subscription.unsubscribe()
+    }
+  }, [router])
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    router.navigate({ to: "/login" })
+  }
   
   const [hovered, setHovered] = useState(false)
+  const [currentDate, setCurrentDate] = useState("")
+
+  useEffect(() => {
+    const now = new Date()
+    const options: Intl.DateTimeFormatOptions = { 
+      weekday: 'long', 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric' 
+    }
+    setCurrentDate(now.toLocaleDateString('en-US', options))
+  }, [])
+
+  const userDisplayName = session?.user?.user_metadata?.username || session?.user?.email || "Guest"
+
+  const getPageTitle = () => {
+    const path = router.state.location.pathname
+    if (path === "/") return "Dashboard"
+    if (path === "/pockets") return "Pockets"
+    if (path === "/transactions") return "Audit Transaksi"
+    if (path === "/settings") return "Settings"
+    if (path === "/guide") return "Guide"
+    if (path === "/login") return "Login"
+    if (path === "/register") return "Register"
+    return "MyPocket CFO"
+  }
 
   const isExpanded =
     !preferences.sidebarCollapsed ||
@@ -83,6 +156,17 @@ function AppShell({ children }: Readonly<{ children: ReactNode }>) {
 
   function closeMobile() {
     setMobileSidebarOpen(false)
+  }
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-sky-500 border-t-transparent" />
+          <div className="text-[11px] text-mutedForeground animate-pulse">Checking access...</div>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -116,30 +200,42 @@ function AppShell({ children }: Readonly<{ children: ReactNode }>) {
         </div>
 
         <nav className="flex-1 px-2 flex flex-col gap-1">
-          <SidebarLink
-            to="/"
-            label="Dashboard"
-            icon={LayoutDashboard}
-            collapsed={!isExpanded}
-          />
-          <SidebarLink
-            to="/pockets"
-            label="Pockets"
-            icon={Wallet}
-            collapsed={!isExpanded}
-          />
+          {session && (
+            <>
+              <SidebarLink
+                to="/"
+                label="Dashboard"
+                icon={LayoutDashboard}
+                collapsed={!isExpanded}
+              />
+              <SidebarLink
+                to="/pockets"
+                label="Pockets"
+                icon={Wallet}
+                collapsed={!isExpanded}
+              />
+              <SidebarLink
+                to="/transactions"
+                label="Transactions"
+                icon={ArrowRightLeft}
+                collapsed={!isExpanded}
+              />
+            </>
+          )}
           <SidebarLink
             to="/guide"
             label="Guide"
             icon={Info}
             collapsed={!isExpanded}
           />
-          <SidebarLink
-            to="/settings"
-            label="Settings"
-            icon={Settings}
-            collapsed={!isExpanded}
-          />
+          {session && (
+            <SidebarLink
+              to="/settings"
+              label="Settings"
+              icon={Settings}
+              collapsed={!isExpanded}
+            />
+          )}
         </nav>
       </aside>
 
@@ -175,9 +271,21 @@ function AppShell({ children }: Readonly<{ children: ReactNode }>) {
               </button>
             </div>
             <nav className="p-2 flex flex-col gap-1">
-              <MobileLink to="/" label="Dashboard" icon={LayoutDashboard} onClick={closeMobile} />
-              <MobileLink to="/pockets" label="Pockets" icon={Wallet} onClick={closeMobile} />
-              <MobileLink to="/settings" label="Settings" icon={Settings} onClick={closeMobile} />
+              {session && (
+                <>
+                  <MobileLink to="/" label="Dashboard" icon={LayoutDashboard} onClick={closeMobile} />
+                  <MobileLink to="/pockets" label="Pockets" icon={Wallet} onClick={closeMobile} />
+                  <MobileLink to="/transactions" label="Transactions" icon={ArrowRightLeft} onClick={closeMobile} />
+                  <MobileLink to="/settings" label="Settings" icon={Settings} onClick={closeMobile} />
+                </>
+              )}
+              <MobileLink to="/guide" label="Guide" icon={Info} onClick={closeMobile} />
+              {!session && (
+                <>
+                  <MobileLink to="/login" label="Login" icon={LayoutDashboard} onClick={closeMobile} />
+                  <MobileLink to="/register" label="Register" icon={WalletCards} onClick={closeMobile} />
+                </>
+              )}
             </nav>
           </aside>
         </div>
@@ -212,17 +320,41 @@ function AppShell({ children }: Readonly<{ children: ReactNode }>) {
                 </button>
                 <div className="min-w-0">
                   <div className="text-sm font-semibold tracking-tight truncate">
-                    MyPocket CFO
+                    {getPageTitle()}
                   </div>
                   <div className="text-[11px] text-mutedForeground truncate">
-                    Your personal money cockpit
+                    {session ? `Logged in as ${userDisplayName}` : "Your personal money cockpit"}
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="hidden md:flex items-center gap-2 text-[11px] text-mutedForeground">
-              Fintech-grade clarity · Fast & private
+            <div className="hidden md:flex items-center gap-4 text-[11px] text-mutedForeground">
+              <span>Fintech-grade clarity · Fast & private</span>
+              {session ? (
+                <button
+                  onClick={handleLogout}
+                  className="flex items-center gap-1.5 rounded-md border border-border/60 bg-background/40 px-3 py-1.5 text-[10px] font-medium transition hover:border-rose-500/60 hover:text-rose-400"
+                >
+                  <LogOut className="h-3 w-3" />
+                  Logout
+                </button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Link
+                    to="/login"
+                    className="rounded-md border border-border/60 bg-background/40 px-3 py-1.5 text-[10px] font-medium transition hover:border-sky-500/60 hover:text-foreground"
+                  >
+                    Login
+                  </Link>
+                  <Link
+                    to="/register"
+                    className="rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-[10px] font-medium text-sky-400 transition hover:bg-sky-500/20"
+                  >
+                    Register
+                  </Link>
+                </div>
+              )}
             </div>
           </header>
 
